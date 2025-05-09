@@ -1,0 +1,168 @@
+name: بناء تطبيق زمولي
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: التحقق من الكود
+        uses: actions/checkout@v3
+
+      - name: فحص محتوى المستودع
+        run: |
+          ls -la
+          echo "===== فحص مجلد التطبيق ====="
+          ls -la app/ || echo "مجلد التطبيق غير موجود"
+          echo "===== فحص مجلد gradle ====="
+          ls -la gradle/ || echo "مجلد gradle غير موجود"
+          echo "===== فحص ملفات gradle ====="
+          ls -la gradle* || echo "ملفات gradle غير موجودة"
+
+      - name: إعداد Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: gradle
+
+      - name: إعداد Gradle Wrapper
+        run: |
+          # إنشاء ملف gradlew إذا لم يكن موجوداً
+          if [ ! -f "gradlew" ]; then
+            echo "إنشاء ملف gradlew..."
+            mkdir -p gradle/wrapper
+            echo '#!/bin/sh
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https://services.gradle.org/distributions/gradle-8.0-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists' > gradle/wrapper/gradle-wrapper.properties
+            
+            echo '#!/usr/bin/env sh
+exec gradle "$@"' > gradlew
+            chmod +x gradlew
+          fi
+          chmod +x ./gradlew
+          
+      - name: إنشاء مجلدات الإخراج
+        run: |
+          mkdir -p app/build/outputs/apk/debug/
+          mkdir -p artifacts
+
+      - name: تنزيل الملفات الكبيرة
+        run: |
+          # التحقق من وجود ملف تكوين الأصول
+          if [ -f "assets-config.yml" ]; then
+            echo "تم العثور على ملف تكوين الأصول"
+            cat assets-config.yml
+            mkdir -p app/src/main/assets/temp_models
+            mkdir -p app/src/main/ml
+            
+            # استخراج URLs للتنزيل
+            echo "جاري تنزيل الملفات الكبيرة..."
+            
+            # تنزيل الملفات الكبيرة بناءً على التكوين
+            # هذا مثال مبسط، يمكن توسيعه لقراءة الملفات من assets-config.yml
+            if grep -q "arabic_dialect_model.tflite" assets-config.yml; then
+              url=$(grep -oP "arabic_dialect_model.tflite: \K.*" assets-config.yml || echo "")
+              if [ ! -z "$url" ]; then
+                echo "تنزيل arabic_dialect_model.tflite"
+                curl -L -o app/src/main/assets/arabic_dialect_model.tflite "$url" || echo "فشل تنزيل arabic_dialect_model.tflite"
+              fi
+            fi
+            
+            if grep -q "logical_reasoning_model.tflite" assets-config.yml; then
+              url=$(grep -oP "logical_reasoning_model.tflite: \K.*" assets-config.yml || echo "")
+              if [ ! -z "$url" ]; then
+                echo "تنزيل logical_reasoning_model.tflite"
+                curl -L -o app/src/main/assets/logical_reasoning_model.tflite "$url" || echo "فشل تنزيل logical_reasoning_model.tflite"
+              fi
+            fi
+            
+            if grep -q "medical_analyzer_model.tflite" assets-config.yml; then
+              url=$(grep -oP "medical_analyzer_model.tflite: \K.*" assets-config.yml || echo "")
+              if [ ! -z "$url" ]; then
+                echo "تنزيل medical_analyzer_model.tflite"
+                curl -L -o app/src/main/assets/medical_analyzer_model.tflite "$url" || echo "فشل تنزيل medical_analyzer_model.tflite"
+              fi
+            fi
+            
+            if grep -q "voice_emotion_model.tflite" assets-config.yml; then
+              url=$(grep -oP "voice_emotion_model.tflite: \K.*" assets-config.yml || echo "")
+              if [ ! -z "$url" ]; then
+                echo "تنزيل voice_emotion_model.tflite"
+                curl -L -o app/src/main/assets/voice_emotion_model.tflite "$url" || echo "فشل تنزيل voice_emotion_model.tflite"
+              fi
+            fi
+            
+            if grep -q "model.tflite" assets-config.yml; then
+              url=$(grep -oP "model.tflite: \K.*" assets-config.yml || echo "")
+              if [ ! -z "$url" ]; then
+                echo "تنزيل model.tflite"
+                curl -L -o app/src/main/ml/model.tflite "$url" || echo "فشل تنزيل model.tflite"
+              fi
+            fi
+            
+            # التحقق من الملفات التي تم تنزيلها
+            echo "===== الملفات التي تم تنزيلها ====="
+            ls -la app/src/main/assets/ || echo "مجلد الأصول غير موجود"
+            ls -la app/src/main/ml/ || echo "مجلد ML غير موجود"
+          else
+            echo "لم يتم العثور على ملف تكوين الأصول - تخطي تنزيل الملفات الكبيرة"
+            
+            # التحقق من وجود إصدارات تحتوي على الملفات الكبيرة
+            REPO_URL="https://api.github.com/repos/$(echo $GITHUB_REPOSITORY)/releases"
+            releases=$(curl -s "$REPO_URL")
+            if echo "$releases" | grep -q "أصول زمولي الكبيرة"; then
+              echo "تم العثور على إصدار يحتوي على الملفات الكبيرة، ولكن ملف التكوين مفقود"
+            fi
+          fi
+
+      - name: بناء APK مع Gradle
+        run: |
+          # إضافة معلومات تصحيح
+          ./gradlew --info clean || true
+          ./gradlew --stacktrace assembleDebug
+
+      - name: تحضير APK للتحميل
+        run: |
+          mkdir -p artifacts
+          find app -name "*.apk" -type f -exec cp {} artifacts/ ; || echo "لم يتم العثور على APK"
+          ls -la artifacts/
+
+      - name: رفع ملف APK
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/
+          if-no-files-found: warn
+
+      - name: إنشاء إصدار
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: app/build/outputs/apk/debug/*.apk
+          name: زمولي v${{ github.run_number }}
+          tag_name: v${{ github.run_number }}
+          draft: false
+          prerelease: false
+          body: |
+            # تطبيق زمولي للمساعدة الصحية
+            
+            الإصدار التلقائي رقم ${{ github.run_number }}
+            
+            ## المميزات
+            
+            - التعرف على الصوت والنطق
+            - تحليل طبي ذكي
+            - ذكاء اصطناعي متكيف
+            - دعم اللغة العربية واللهجات المحلية
+            - واجهة مستخدم سهلة الاستخدام
